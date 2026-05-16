@@ -43,7 +43,7 @@ const RULES: Rule[] = [
   {
     name: "confidence_override",
     test: (t) =>
-      /"confidence"\s*:\s*(?:0\.99|1\.0|1)/i.test(t) ||
+      /"confidence"\s*:\s*(?:0\.99|1\.0|1)(?![0-9.])/i.test(t) ||
       /set\s+(?:your\s+)?confidence\s+to/i.test(t),
   },
   {
