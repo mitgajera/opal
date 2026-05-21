@@ -64,4 +64,6 @@ pub enum OpalError {
     InvalidVerdictEncoding,
     #[msg("Council feeds are not configured — call set_council_feeds first")]
     CouncilFeedsNotConfigured,
+    #[msg("Oracle job hash is not configured — call set_oracle_job first")]
+    OracleJobHashNotConfigured,
 }

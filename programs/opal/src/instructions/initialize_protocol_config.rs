@@ -113,6 +113,7 @@ pub fn handler(
     config.llm_challenge_window_seconds = args.llm_challenge_window_seconds;
     config.vote_setup_window_seconds = args.vote_setup_window_seconds;
     config.voting_window_seconds = args.voting_window_seconds;
+    config.oracle_job_hash = [0u8; 32];
     config.bump = ctx.bumps.protocol_config;
 
     Ok(())

@@ -94,13 +94,13 @@ pub fn handler(ctx: Context<DisputeAssertion>, _args: DisputeAssertionArgs) -> R
         assertion.assertion_bond_amount_pusd,
         protocol_config.llm_dispute_bond_ratio_bps,
     )?;
-    let council_feeds = protocol_config.council_feeds;
+    let oracle_job_hash = protocol_config.oracle_job_hash;
     drop(assertion);
     drop(protocol_config);
     require!(bond_amount > 0, OpalError::InsufficientBondAmount);
     require!(
-        council_feeds.iter().all(|f| *f != Pubkey::default()),
-        OpalError::CouncilFeedsNotConfigured
+        oracle_job_hash != [0u8; 32],
+        OpalError::OracleJobHashNotConfigured
     );
 
     token::transfer(
@@ -129,7 +129,7 @@ pub fn handler(ctx: Context<DisputeAssertion>, _args: DisputeAssertionArgs) -> R
     let mut llm_round = ctx.accounts.llm_resolution_round.load_init()?;
     llm_round.assertion = ctx.accounts.assertion.key();
     llm_round.dispute = ctx.accounts.llm_dispute.key();
-    llm_round.council_feeds = council_feeds;
+    llm_round.oracle_job_hash = oracle_job_hash;
     llm_round.switchboard_program = Pubkey::default();
     llm_round.switchboard_queue = Pubkey::default();
     llm_round.switchboard_feed_hash = [0; 32];

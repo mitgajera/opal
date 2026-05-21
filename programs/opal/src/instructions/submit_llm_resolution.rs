@@ -1,8 +1,7 @@
 use crate::{
     constants::{
         ASSERTION_SEED, ASSERTION_STATE_ASSERTED_LLM, ASSERTION_STATE_PENDING_LLM,
-        COUNCIL_SIZE, LLM_ROUND_SEED, MAX_FEED_STALE_SLOTS, MIN_FEED_SAMPLES,
-        OUTCOME_UNRESOLVABLE, PROTOCOL_CONFIG_SEED,
+        LLM_ROUND_SEED, OUTCOME_UNRESOLVABLE, PROTOCOL_CONFIG_SEED,
     },
     errors::OpalError,
     state::{AssertionAccount, LlmResolutionRound, ProtocolConfig},
@@ -10,7 +9,7 @@ use crate::{
 };
 use anchor_lang::prelude::*;
 use switchboard_on_demand::prelude::rust_decimal::prelude::ToPrimitive;
-use switchboard_on_demand::PullFeedAccountData;
+use switchboard_on_demand::prelude::PullFeedAccountData;
 
 #[derive(Accounts)]
 pub struct SubmitLlmResolution<'info> {
@@ -37,31 +36,8 @@ pub struct SubmitLlmResolution<'info> {
     )]
     pub llm_resolution_round: AccountLoader<'info, LlmResolutionRound>,
 
-    /// CHECK: pubkey verified against llm_resolution_round.council_feeds[0]
-    pub feed_0: UncheckedAccount<'info>,
-    /// CHECK: pubkey verified against llm_resolution_round.council_feeds[1]
-    pub feed_1: UncheckedAccount<'info>,
-    /// CHECK: pubkey verified against llm_resolution_round.council_feeds[2]
-    pub feed_2: UncheckedAccount<'info>,
-}
-
-fn read_verdict(
-    feed_info: &AccountInfo<'_>,
-    expected_key: &Pubkey,
-    clock: &Clock,
-) -> Result<u8> {
-    // Identity check before any data borrow — rejects substituted feed accounts early.
-    require!(feed_info.key() == *expected_key, OpalError::WrongFeed);
-    let data = feed_info.try_borrow_data()?;
-    let feed = PullFeedAccountData::parse(data)
-        .map_err(|_| error!(OpalError::FeedParseFailed))?;
-    let value = feed
-        .get_value(clock.slot, MAX_FEED_STALE_SLOTS as u64, MIN_FEED_SAMPLES, false)
-        .map_err(|_| error!(OpalError::FeedStaleOrUnverified))?;
-    require!(value.is_integer(), OpalError::InvalidVerdictEncoding);
-    let verdict = value.to_u8().ok_or(OpalError::InvalidVerdictEncoding)?;
-    require!(verdict <= OUTCOME_UNRESOLVABLE, OpalError::InvalidVerdictEncoding);
-    Ok(verdict)
+    /// CHECK: Oracle quote account from Switchboard On-Demand
+    pub oracle_quote: UncheckedAccount<'info>,
 }
 
 pub fn handler(ctx: Context<SubmitLlmResolution>) -> Result<()> {
@@ -72,26 +48,30 @@ pub fn handler(ctx: Context<SubmitLlmResolution>) -> Result<()> {
     );
 
     let round = ctx.accounts.llm_resolution_round.load()?;
-    let council_feeds = round.council_feeds;
+    let oracle_job_hash = round.oracle_job_hash;
     drop(round);
 
-    let challenge_window = ctx.accounts.protocol_config.load()?.llm_challenge_window_seconds;
+    let protocol_config = ctx.accounts.protocol_config.load()?;
+    let challenge_window = protocol_config.llm_challenge_window_seconds;
+    require!(
+        oracle_job_hash == protocol_config.oracle_job_hash,
+        OpalError::ConfigInvariantViolation
+    );
+    drop(protocol_config);
+
     let clock = Clock::get()?;
 
-    let votes: [u8; COUNCIL_SIZE] = [
-        read_verdict(ctx.accounts.feed_0.as_ref(), &council_feeds[0], &clock)?,
-        read_verdict(ctx.accounts.feed_1.as_ref(), &council_feeds[1], &clock)?,
-        read_verdict(ctx.accounts.feed_2.as_ref(), &council_feeds[2], &clock)?,
-    ];
+    let quote_data = ctx.accounts.oracle_quote.try_borrow_data()?;
+    let feed = PullFeedAccountData::parse(quote_data)
+        .map_err(|_| error!(OpalError::FeedParseFailed))?;
 
-    let mut counts = [0u8; OUTCOME_UNRESOLVABLE as usize + 1];
-    for v in votes.iter() {
-        counts[*v as usize] += 1;
-    }
-    // 1-1-1 tie falls back to Unresolvable.
-    let verdict = (0u8..=(OUTCOME_UNRESOLVABLE))
-        .find(|&o| counts[o as usize] > (COUNCIL_SIZE as u8 / 2))
-        .unwrap_or(OUTCOME_UNRESOLVABLE);
+    let value = feed
+        .get_value(clock.slot, 250, 3, false)
+        .map_err(|_| error!(OpalError::FeedStaleOrUnverified))?;
+
+    require!(value.is_integer(), OpalError::InvalidVerdictEncoding);
+    let verdict = value.to_u8().ok_or(OpalError::InvalidVerdictEncoding)?;
+    require!(verdict <= OUTCOME_UNRESOLVABLE, OpalError::InvalidVerdictEncoding);
 
     let now = clock.unix_timestamp;
     let challenge_deadline = checked_add_i64(now, challenge_window)?;
